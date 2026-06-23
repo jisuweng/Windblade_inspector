@@ -1,0 +1,30 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ROS/catkin generated directories
+build/
+devel/
+install/
+logs/
+.catkin_tools/
+
+# Large ROS bag/data files
+*.bag
+*.bag.active
+support/bag/
+
+# Local editor/assistant metadata
+.vscode/
+.idea/
+.codemap/
+.claude/
+
+# Runtime/cache files
+*.log
+*.tmp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

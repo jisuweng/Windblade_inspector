@@ -1,0 +1,26 @@
+<launch>
+  <arg name="input_topic" default="/livox/lidar" />
+  <arg name="converted_topic" default="/livox/points_raw" />
+  <arg name="cropped_topic" default="/livox/points" />
+  <arg name="horizontal_fov_deg" default="60.0" />
+  <arg name="vertical_fov_deg" default="60.0" />
+  <arg name="min_range" default="0.0" />
+  <arg name="max_range" default="-1.0" />
+  <arg name="output_frame_id" default="" />
+  <arg name="queue_size" default="10" />
+
+  <node pkg="livox_to_pointcloud2"
+        type="livox_to_pointcloud2_node"
+        name="livox_to_pointcloud2"
+        output="screen">
+    <param name="input_topic" value="$(arg input_topic)" />
+    <param name="converted_topic" value="$(arg converted_topic)" />
+    <param name="cropped_topic" value="$(arg cropped_topic)" />
+    <param name="horizontal_fov_deg" value="$(arg horizontal_fov_deg)" />
+    <param name="vertical_fov_deg" value="$(arg vertical_fov_deg)" />
+    <param name="min_range" value="$(arg min_range)" />
+    <param name="max_range" value="$(arg max_range)" />
+    <param name="output_frame_id" value="$(arg output_frame_id)" />
+    <param name="queue_size" value="$(arg queue_size)" />
+  </node>
+</launch>

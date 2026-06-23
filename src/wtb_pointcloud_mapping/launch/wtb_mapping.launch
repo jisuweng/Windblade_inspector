@@ -1,0 +1,33 @@
+<launch>
+  <arg name="config_file" default="$(find wtb_pointcloud_mapping)/config/mapping.yaml" />
+  <arg name="use_initial_pose_frame" default="true" />
+  <arg name="use_lidar_filter" default="true" />
+  <arg name="use_rviz" default="true" />
+  <arg name="rviz_config" default="$(find wtb_pointcloud_mapping)/rviz/wtb_mapping.rviz" />
+
+  <rosparam file="$(arg config_file)" command="load" />
+
+  <node if="$(arg use_initial_pose_frame)"
+        pkg="wtb_pointcloud_mapping"
+        type="initial_pose_frame_node"
+        name="initial_pose_frame"
+        output="screen" />
+
+  <node if="$(arg use_lidar_filter)"
+        pkg="wtb_pointcloud_mapping"
+        type="lidar_filter"
+        name="lidar_filter"
+        output="screen" />
+
+  <node pkg="wtb_pointcloud_mapping"
+        type="wtb_mapping_node"
+        name="wtb_mapping_node"
+        output="screen" />
+
+  <node if="$(arg use_rviz)"
+        pkg="rviz"
+        type="rviz"
+        name="wtb_mapping_rviz"
+        args="-d $(arg rviz_config)"
+        output="screen" />
+</launch>

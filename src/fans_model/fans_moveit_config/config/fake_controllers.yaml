@@ -1,0 +1,10 @@
+controller_list:
+  - name: fake_fans_controller
+    type: $(arg fake_execution_type)
+    joints:
+      - fans_joint
+initial:  # Define initial robot poses.
+#  - group: fans
+#    pose: home
+
+  []
