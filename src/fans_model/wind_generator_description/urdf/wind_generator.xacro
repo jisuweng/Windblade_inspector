@@ -80,6 +80,7 @@
         </actuator>
     </transmission>
     <gazebo>
+        <plugin name="wind_generator_pose_lock" filename="/home/byz/WTBinspector_ws/devel/lib/libwind_generator_pose_lock_plugin.so" />
         <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
             <robotNamespace>/</robotNamespace>
         </plugin>

@@ -36,7 +36,7 @@ float readFloat(const sensor_msgs::PointCloud2& cloud, const std::size_t point_i
   return value;
 }
 
-TEST(LivoxConverter, PublishesConvertedPointCloud2AndCroppedLivoxCloud)
+TEST(LivoxConverter, PublishesCroppedPointCloud2AndCroppedLivoxCloud)
 {
   livox_laser_simulation::CustomMsg input;
   input.header.frame_id = "livox_link";
@@ -60,19 +60,19 @@ TEST(LivoxConverter, PublishesConvertedPointCloud2AndCroppedLivoxCloud)
 
   EXPECT_EQ(7U, result.input_count);
   EXPECT_EQ(3U, result.kept_count);
-  ASSERT_EQ(7U, result.converted->width);
+  ASSERT_EQ(3U, result.cropped_pointcloud2->width);
   ASSERT_EQ(3U, result.cropped.point_num);
   ASSERT_EQ(3U, result.cropped.points.size());
-  EXPECT_FALSE(result.converted->is_dense);
-  EXPECT_EQ("livox_link", result.converted->header.frame_id);
+  EXPECT_TRUE(result.cropped_pointcloud2->is_dense);
+  EXPECT_EQ("livox_link", result.cropped_pointcloud2->header.frame_id);
   EXPECT_EQ("livox_link", result.cropped.header.frame_id);
   EXPECT_EQ(input.timebase, result.cropped.timebase);
   EXPECT_EQ(input.lidar_id, result.cropped.lidar_id);
-  EXPECT_FLOAT_EQ(42.0F, readFloat(*result.converted, 0, 16));
+  EXPECT_FLOAT_EQ(42.0F, readFloat(*result.cropped_pointcloud2, 0, 16));
   EXPECT_EQ(42U, result.cropped.points[0].reflectivity);
 }
 
-TEST(LivoxConverter, RangeOnlyAffectsCroppedCloudAndFrameOverrideAffectsBoth)
+TEST(LivoxConverter, RangeAffectsBothCroppedOutputsAndFrameOverrideAffectsBoth)
 {
   livox_laser_simulation::CustomMsg input;
   input.header.frame_id = "sensor";
@@ -88,10 +88,10 @@ TEST(LivoxConverter, RangeOnlyAffectsCroppedCloudAndFrameOverrideAffectsBoth)
   livox_to_pointcloud2::LivoxConverter converter(config);
   const livox_to_pointcloud2::ConversionResult result = converter.convert(input);
 
-  EXPECT_EQ(2U, result.converted->width);
+  EXPECT_EQ(1U, result.cropped_pointcloud2->width);
   ASSERT_EQ(1U, result.cropped.point_num);
   ASSERT_EQ(1U, result.cropped.points.size());
-  EXPECT_EQ("body", result.converted->header.frame_id);
+  EXPECT_EQ("body", result.cropped_pointcloud2->header.frame_id);
   EXPECT_EQ("body", result.cropped.header.frame_id);
   EXPECT_FLOAT_EQ(2.0F, result.cropped.points[0].x);
 }

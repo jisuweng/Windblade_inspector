@@ -14,6 +14,7 @@ logs/
 *.bag
 *.bag.active
 support/bag/
+PaviaU_unpacked.zip
 
 # Local editor/assistant metadata
 .vscode/

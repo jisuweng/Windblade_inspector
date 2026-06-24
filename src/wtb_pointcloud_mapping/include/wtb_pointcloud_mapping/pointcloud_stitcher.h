@@ -15,12 +15,6 @@ class PointCloudStitcher
 public:
   PointCloudStitcher();
 
-  void setFilterParams(double min_range,
-                       double max_range,
-                       double z_min,
-                       double z_max,
-                       bool remove_nan);
-
   void setGlobalCloudParams(bool enable,
                             double voxel_leaf_size,
                             std::size_t max_points);
@@ -40,12 +34,6 @@ public:
 
 private:
   void downsampleGlobalCloud();
-
-  double min_range_;
-  double max_range_;
-  double z_min_;
-  double z_max_;
-  bool remove_nan_;
 
   bool global_enable_;
   double voxel_leaf_size_;

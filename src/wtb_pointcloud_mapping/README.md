@@ -1,6 +1,6 @@
 # wtb_pointcloud_mapping
 
-`wtb_pointcloud_mapping` implements the WTBInspector-style point cloud mapping and management layer for a Gazebo/Livox/PX4 workflow. It does pose-based direct stitching from ground-truth odometry, maintains a downsampled global point cloud, maintains a sparse 3D log-odds occupancy grid, and exposes occupied-voxel query interfaces for later tower, rotor plane, BRI ring, blade control-point, and blade-tip search modules.
+`wtb_pointcloud_mapping` implements the WTBInspector-style point cloud mapping layer for a Gazebo/Livox/PX4 workflow. It does pose-based direct stitching from ground-truth odometry, maintains a downsampled global point cloud, and maintains a sparse 3D log-odds occupancy grid.
 
 The launch file starts `initial_pose_frame_node` by default. It captures the
 first position from `/iris_0/mavros/vision_odom/odom`, defines that position as
@@ -12,6 +12,40 @@ The wind-generator model intentionally uses its own TF root
 named `world`.
 
 This package is not LiDAR-SLAM. It does not implement ICP, NDT, LOAM, FAST-LIO, loop closure, or pose correction. It assumes `/iris_0/mavros/vision_odom/odom` provides `T_map_body`.
+
+## Structure
+
+The mapping package is split into a small ROS adapter and reusable mapping
+modules:
+
+```text
+include/wtb_pointcloud_mapping/mapping_config.h
+src/mapping_config.cpp
+  Loads YAML/ROS parameters into typed config structs.
+
+include/wtb_pointcloud_mapping/ros_conversions.h
+src/ros_conversions.cpp
+  Converts Livox CustomMsg, Odometry, Eigen transforms, and PointCloud2.
+
+include/wtb_pointcloud_mapping/mapping_pipeline.h
+src/mapping_pipeline.cpp
+  Owns the mapping flow: lidar cloud -> map cloud -> global cloud -> occupancy grid.
+
+include/wtb_pointcloud_mapping/pointcloud_stitcher.h
+src/pointcloud_stitcher.cpp
+  Handles map-frame transformation and global cloud accumulation.
+
+include/wtb_pointcloud_mapping/occupancy_grid_3d.h
+src/occupancy_grid_3d.cpp
+  Sparse 3D log-odds voxel grid and ray-casting updates.
+
+include/wtb_pointcloud_mapping/wtb_mapping_node.h
+src/wtb_mapping_node.cpp
+  ROS subscriptions, TF lookup, publishers, and debug output only.
+```
+
+`CMakeLists.txt` builds the reusable `wtb_mapping_core` library first, then links
+the `wtb_mapping_node` executable against it.
 
 ## Build
 
@@ -45,11 +79,10 @@ The launch file starts RViz by default with `rviz/wtb_mapping.rviz`. To run the 
 roslaunch wtb_pointcloud_mapping wtb_mapping.launch use_rviz:=false
 ```
 
-The launch file also starts the C++ `lidar_filter` node by default. The filter subscribes to `/livox/lidar`, preserves the original Livox frame and point coordinates, and publishes `/livox/lidar_filtered`. The current `mapping.yaml` subscribes to `/livox/lidar`; set `input/cloud_topic` to `/livox/lidar_filtered` if you want the mapper to consume the filtered stream. To skip starting the filter node:
-
-```bash
-roslaunch wtb_pointcloud_mapping wtb_mapping.launch use_lidar_filter:=false
-```
+The mapper has a single point-cloud subscription:
+`/livox/lidar_filtered`. That topic is produced by `livox_to_pointcloud2` after
+FOV/range cropping. The mapping launch file does not start any LiDAR filter node
+and the mapping pipeline does not apply range/FOV/Z filtering to the input cloud.
 
 ## Inputs
 
@@ -88,21 +121,41 @@ The node publishes:
 /wtb/global_cloud         sensor_msgs/PointCloud2
 /wtb/occupied_cloud       sensor_msgs/PointCloud2
 /wtb/free_cloud           sensor_msgs/PointCloud2, enabled by debug/publish_free_cloud
+/wtb/uav_path             nav_msgs/Path
 /wtb/map_debug_info       std_msgs/String
-/wtb/tower_candidate_cloud   sensor_msgs/PointCloud2
-/wtb/tower_slice_centers    sensor_msgs/PointCloud2
-/wtb/tower_control_points   sensor_msgs/PointCloud2
-/wtb/tower_axis_marker      visualization_msgs/Marker
-/wtb/tower_global_axis_marker visualization_msgs/Marker
-/wtb/tower_ransac_line_marker visualization_msgs/Marker
-/wtb/tower_debug_info       std_msgs/String
 ```
 
 All output point clouds use `header.frame_id = world_frame`, which defaults to `map`.
 
+`wtb_mapping.launch` also starts `wtb_tower_detector_node` by default. It consumes
+`/wtb/current_cloud_world` and `/wtb/odom`; the point-cloud stitching and occupancy
+pipeline remain unchanged. To disable it:
+
+```bash
+roslaunch wtb_pointcloud_mapping wtb_mapping.launch use_tower_detector:=false
+```
+
+The tower detector publishes:
+
+```text
+/wtb/tower_detector/status          std_msgs/String
+/wtb/tower_detector/control_point   geometry_msgs/PointStamped
+/wtb/tower_detector/control_pose    geometry_msgs/PoseStamped
+/wtb/tower_detector/axis_direction  geometry_msgs/Vector3Stamped
+/wtb/tower_detector/markers         visualization_msgs/MarkerArray
+/wtb/tower_detector/inlier_cloud    sensor_msgs/PointCloud2
+/wtb/tower_detector/path            nav_msgs/Path
+/wtb/tower_detector/diameter        std_msgs/Float64
+/wtb/tower_detector/radius          std_msgs/Float64
+```
+
+It also mirrors the geometry into ROS params under `/wtb/tower_detector/*` and,
+by default, `/tower/*` for compatibility with older `tower_detector.py` consumers.
+
 ## RViz
 
-The launch file opens RViz automatically. If you open RViz manually, use:
+The launch file opens RViz automatically with `rviz/wtb_mapping.rviz`. If you open
+RViz manually, use:
 
 ```text
 Fixed Frame: map
@@ -114,86 +167,10 @@ Add `PointCloud2` displays:
 /wtb/current_cloud_world
 /wtb/global_cloud
 /wtb/occupied_cloud
-/wtb/tower_candidate_cloud
-/wtb/tower_slice_centers
-/wtb/tower_control_points
+/wtb/uav_path
 ```
 
 Enable `/wtb/free_cloud` only when needed, because free voxels can be much denser than occupied voxels.
-
-Add `Marker` displays:
-
-```text
-/wtb/tower_axis_marker
-/wtb/tower_global_axis_marker
-/wtb/tower_ransac_line_marker
-```
-
-## Tower Axis Estimation
-
-The mapper includes a WTBInspector-style tower center-axis estimator. The default method (`slice_center_axis`) is:
-
-```text
-Current frame map-frame point cloud
--> ROI crop around UAV, get tower candidate cloud
--> Split by Z height into slices
--> Each slice projected to XY plane
--> Circle fit (least squares) or centroid fallback per slice
--> Outlier rejection on slice centers
--> Fit local tower axis from slice centers
--> Temporal smoothing + jump rejection
--> Publish stable tower center axis
-```
-
-The old RANSAC-line-on-surface approach is preserved only as debug mode (`ransac_line_debug`). It fits `SACMODEL_PARALLEL_LINE` constrained to near-vertical and publishes a **yellow** line marker for comparison, but it is NOT used as the tower center axis.
-
-Start it with the normal launch command:
-
-```bash
-roslaunch wtb_pointcloud_mapping wtb_mapping.launch
-```
-
-RViz expected behavior:
-
-```text
-Fixed Frame: map
-
-PointCloud2:
-  /wtb/tower_candidate_cloud    -- ROI-filtered tower points (yellow)
-  /wtb/tower_slice_centers      -- Estimated slice center points (intensity = fit quality)
-  /wtb/tower_control_points     -- Accumulated control points along height
-
-Marker:
-  /wtb/tower_axis_marker        -- GREEN: current smoothed tower center axis
-  /wtb/tower_global_axis_marker -- RED: global axis fitted from control points
-  /wtb/tower_ransac_line_marker -- YELLOW: RANSAC surface line (debug only, NOT the center axis)
-```
-
-Marker meanings:
-- **Green** (`/wtb/tower_axis_marker`): Current smoothed tower center axis, estimated from slice centers with temporal filtering.
-- **Red** (`/wtb/tower_global_axis_marker`): Global center axis fitted from all accumulated control points. Stabilizes as more control points accumulate.
-- **Yellow** (`/wtb/tower_ransac_line_marker`): RANSAC-fitted surface vertical line. This may still cling to the tower surface. It is debug-only and does NOT represent the center axis.
-
-Useful debug topic:
-
-```bash
-rostopic echo /wtb/tower_debug_info
-```
-
-The debug string reports method, candidate count, raw slices, valid slice centers, circle fit success, centroid fallback count, local/smoothed/global axis validity, jump rejection status, and control point count.
-
-Common tuning:
-
-```text
-If candidate cloud contains too much ground: increase tower_axis/min_z.
-If candidate cloud contains too many blade or background points: reduce tower_axis/roi_radius_xy or tower_axis/max_range_from_drone.
-If slice centers are noisy: increase tower_axis/slice_height, adjust tower_axis/circle_fit_residual_threshold.
-If circle fit fails often: increase tower_axis/tower_radius_max, ensure tower_axis/fallback_to_slice_centroid is true.
-If axis still swings: reduce tower_axis/axis_point_alpha and tower_axis/axis_dir_alpha for stronger smoothing.
-If axis jumps to wrong structure: reduce tower_axis/max_axis_lateral_jump, tower_axis/max_axis_angle_jump_deg.
-If control points jump: reduce tower_axis/max_control_point_jump.
-If the global axis is obviously offset: check LiDAR extrinsic, odom pose, map frame semantics, and whether the stitched cloud is duplicated.
-```
 
 ## Parameters
 
@@ -207,44 +184,19 @@ input/odom_topic
 input/world_frame
 input/body_frame
 input/lidar_frame
-lidar_filter/input_topic
-lidar_filter/output_topic
-lidar_filter/ground_remove_z
-lidar_filter/z_max
-lidar_filter/range_min
-lidar_filter/range_max
-lidar_filter/front_angle_deg
-lidar_filter/x_min
-lidar_filter/y_abs
-lidar_filter/use_3d_range
+initial_pose_frame/input_odom_topic
+initial_pose_frame/output_odom_topic
 sync/max_time_diff
 sync/strict_time_sync
 extrinsic/lidar_to_body_xyz
 extrinsic/lidar_to_body_rpy
-filter/min_range
-filter/max_range
-filter/z_min
-filter/z_max
 global_cloud/voxel_leaf_size
 global_cloud/max_points
 occupancy_grid/resolution
 occupancy_grid/max_ray_length
-tower_axis/enable
-tower_axis/input_cloud_mode
-tower_axis/voxel_leaf_size
-tower_axis/min_z
-tower_axis/max_z
-tower_axis/roi_radius_xy
-tower_axis/min_range_from_drone
-tower_axis/max_range_from_drone
-tower_axis/ransac_distance_threshold
-tower_axis/ransac_max_iterations
-tower_axis/min_inliers
-tower_axis/vertical_angle_threshold_deg
-tower_axis/min_control_point_spacing
-tower_axis/max_control_point_jump
-tower_axis/require_height_increase
-tower_axis/fit_global_axis_min_points
+path/topic
+path/min_distance
+path/max_points
 debug/publish_free_cloud
 ```
 
@@ -256,8 +208,6 @@ R = Rz(yaw) * Ry(pitch) * Rx(roll)
 
 If `input/use_tf` is `true`, the node looks up `T_body_lidar` from TF using `lookupTransform(body_frame, lidar_frame, stamp)`. The default is `false`, so the YAML extrinsic is used.
 
-`lidar_filter/*` controls the C++ raw Livox filter node. Its filtering logic matches `scripts/filter_livox_forward.py`: optional ground removal, `z_max`, `x_min`, 2D or 3D range, front angle, and optional `y_abs`. It does not transform points; the output stays in the original `/livox/lidar` coordinate frame.
-
 ## Debugging
 
 Start with:
@@ -266,7 +216,7 @@ Start with:
 rostopic echo /wtb/map_debug_info
 ```
 
-The debug string includes current LiDAR points, filtered world points, global cloud points, total occupancy voxels, occupied voxels, cloud-odom time difference, and processing time.
+The debug string includes current LiDAR points, current world points, global cloud points, total occupancy voxels, occupied voxels, cloud-odom time difference, and processing time.
 
 If the stitched cloud is doubled, thick, stretched, or tilted, check these first:
 

@@ -11,12 +11,7 @@ namespace wtb_pointcloud_mapping
 {
 
 PointCloudStitcher::PointCloudStitcher()
-  : min_range_(0.5),
-    max_range_(80.0),
-    z_min_(-10.0),
-    z_max_(120.0),
-    remove_nan_(true),
-    global_enable_(true),
+  : global_enable_(true),
     voxel_leaf_size_(0.10),
     max_points_(3000000),
     frames_since_downsample_(0),
@@ -24,19 +19,6 @@ PointCloudStitcher::PointCloudStitcher()
 {
   global_cloud_->height = 1;
   global_cloud_->is_dense = false;
-}
-
-void PointCloudStitcher::setFilterParams(double min_range,
-                                         double max_range,
-                                         double z_min,
-                                         double z_max,
-                                         bool remove_nan)
-{
-  min_range_ = std::max(0.0, min_range);
-  max_range_ = std::max(min_range_, max_range);
-  z_min_ = z_min;
-  z_max_ = z_max;
-  remove_nan_ = remove_nan;
 }
 
 void PointCloudStitcher::setGlobalCloudParams(bool enable,
@@ -70,18 +52,6 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr PointCloudStitcher::transformToWorld(
         std::isfinite(p_lidar.x) && std::isfinite(p_lidar.y) && std::isfinite(p_lidar.z);
     if (!finite_lidar)
     {
-      if (remove_nan_)
-      {
-        continue;
-      }
-      continue;
-    }
-
-    const double range = std::sqrt(static_cast<double>(p_lidar.x) * p_lidar.x +
-                                   static_cast<double>(p_lidar.y) * p_lidar.y +
-                                   static_cast<double>(p_lidar.z) * p_lidar.z);
-    if (range < min_range_ || range > max_range_)
-    {
       continue;
     }
 
@@ -90,11 +60,6 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr PointCloudStitcher::transformToWorld(
 
     if (!std::isfinite(point_map.x()) || !std::isfinite(point_map.y()) ||
         !std::isfinite(point_map.z()))
-    {
-      continue;
-    }
-
-    if (point_map.z() < z_min_ || point_map.z() > z_max_)
     {
       continue;
     }
@@ -135,7 +100,7 @@ void PointCloudStitcher::addToGlobalCloud(
   if (max_points_ > 0 && global_cloud_->points.size() > max_points_)
   {
     ROS_WARN_THROTTLE(2.0,
-                      "[WTBMapping] global cloud still has %zu points after filtering; "
+                      "[WTBMapping] global cloud still has %zu points after downsampling; "
                       "increase voxel_leaf_size or max_points.",
                       global_cloud_->points.size());
   }

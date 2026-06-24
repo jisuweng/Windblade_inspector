@@ -29,7 +29,7 @@ struct FilterConfig
 
 struct ConversionResult
 {
-  PointCloud2Ptr converted;
+  PointCloud2Ptr cropped_pointcloud2;
   livox_laser_simulation::CustomMsg cropped;
   std::size_t input_count = 0;
   std::size_t kept_count = 0;
@@ -54,7 +54,6 @@ public:
   {
     ConversionResult result;
     result.input_count = livox_msg.points.size();
-    result.converted = createCloud(livox_msg, result.input_count);
     result.cropped.header = livox_msg.header;
     result.cropped.timebase = livox_msg.timebase;
     result.cropped.lidar_id = livox_msg.lidar_id;
@@ -65,16 +64,8 @@ public:
       result.cropped.header.frame_id = config_.output_frame_id;
     }
 
-    std::uint8_t* converted_destination = result.converted->data.data();
     for (const auto& point : livox_msg.points)
     {
-      writePoint(converted_destination, point);
-      converted_destination += result.converted->point_step;
-
-      if (!isFinite(point))
-      {
-        result.converted->is_dense = false;
-      }
       if (accepts(point.x, point.y, point.z))
       {
         result.cropped.points.push_back(point);
@@ -83,6 +74,14 @@ public:
 
     result.kept_count = result.cropped.points.size();
     result.cropped.point_num = static_cast<std::uint32_t>(result.kept_count);
+    result.cropped_pointcloud2 = createCloud(livox_msg, result.kept_count);
+
+    std::uint8_t* destination = result.cropped_pointcloud2->data.data();
+    for (const auto& point : result.cropped.points)
+    {
+      writePoint(destination, point);
+      destination += result.cropped_pointcloud2->point_step;
+    }
 
     return result;
   }
@@ -109,11 +108,6 @@ private:
     }
     config.max_range = std::max(config.min_range, config.max_range);
     return config;
-  }
-
-  static bool isFinite(const livox_laser_simulation::CustomPoint& point)
-  {
-    return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
   }
 
   bool accepts(const double x, const double y, const double z) const

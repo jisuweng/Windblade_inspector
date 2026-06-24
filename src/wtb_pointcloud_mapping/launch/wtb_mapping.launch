@@ -1,7 +1,7 @@
 <launch>
   <arg name="config_file" default="$(find wtb_pointcloud_mapping)/config/mapping.yaml" />
   <arg name="use_initial_pose_frame" default="true" />
-  <arg name="use_lidar_filter" default="true" />
+  <arg name="use_tower_detector" default="true" />
   <arg name="use_rviz" default="true" />
   <arg name="rviz_config" default="$(find wtb_pointcloud_mapping)/rviz/wtb_mapping.rviz" />
 
@@ -13,15 +13,15 @@
         name="initial_pose_frame"
         output="screen" />
 
-  <node if="$(arg use_lidar_filter)"
-        pkg="wtb_pointcloud_mapping"
-        type="lidar_filter"
-        name="lidar_filter"
-        output="screen" />
-
   <node pkg="wtb_pointcloud_mapping"
         type="wtb_mapping_node"
         name="wtb_mapping_node"
+        output="screen" />
+
+  <node if="$(arg use_tower_detector)"
+        pkg="wtb_pointcloud_mapping"
+        type="wtb_tower_detector_node"
+        name="wtb_tower_detector"
         output="screen" />
 
   <node if="$(arg use_rviz)"
