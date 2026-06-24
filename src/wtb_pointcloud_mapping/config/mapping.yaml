@@ -1,6 +1,8 @@
 input:
-  cloud_topic: "/livox/points"
-  odom_topic: "/wtb/odom"
+  # Only point-cloud subscription used by wtb_mapping_node.
+  # This topic is published by livox_to_pointcloud2 after FOV/range cropping.
+  cloud_topic: "/livox/lidar"
+  odom_topic: &local_odom "/wtb/odom"
   cloud_type: "livox_custom"
   use_tf: false
   world_frame: "map"
@@ -9,7 +11,7 @@ input:
 
 initial_pose_frame:
   input_odom_topic: "/iris_0/mavros/vision_odom/odom"
-  output_odom_topic: "/wtb/odom"
+  output_odom_topic: *local_odom
   source_frame: "world"
   local_frame: "map"
   body_frame: "iris_0/base_link"
@@ -25,25 +27,6 @@ extrinsic:
   # <pose>0.07 0 0.072 0 0.3925 0</pose>
   lidar_to_body_xyz: [0.07, 0.0, 0.072]
   lidar_to_body_rpy: [0.0, 0.3925, 0.0]
-
-filter:
-  min_range: 0.5
-  max_range: 80.0
-  z_min: -10.0
-  z_max: 120.0
-  remove_nan: true
-
-lidar_filter:
-  input_topic: "/livox/lidar"
-  output_topic: "/livox/lidar_filtered"
-  ground_remove_z: -999.0
-  z_max: 3.0
-  range_min: 1.0
-  range_max: 8.0
-  front_angle_deg: 90.0
-  x_min: 0.0
-  y_abs: -1.0
-  use_3d_range: false
 
 global_cloud:
   enable: true
@@ -63,117 +46,46 @@ occupancy_grid:
   max_ray_length: 80.0
   publish_rate: 2.0
 
-tower_axis:
+path:
   enable: true
-
-  # Default method: slice-based center axis estimation
-  method: "slice_center_axis"   # "slice_center_axis" or "ransac_line_debug"
-
-  input_cloud_mode: "current"   # "current" or "global"
-
-  # Point cloud preprocessing
-  voxel_leaf_size: 0.10
-  min_z: 0.5
-  max_z: 120.0
-
-  use_drone_roi: true
-  roi_radius_xy: 15.0
-  roi_z_below: 8.0
-  roi_z_above: 6.0
-
-  min_range_from_drone: 1.0
-  max_range_from_drone: 35.0
-
-  # Slice parameters
-  slice_height: 0.5
-  slice_min_points: 40
-  slice_max_points: 20000
-
-  # Circle fitting / center estimation
-  circle_fit_enable: true
-  tower_radius_prior: 0.0        # Set to known radius (e.g. 2.0) if available; 0 = auto-estimate
-  tower_radius_min: 0.5
-  tower_radius_max: 8.0
-  circle_fit_residual_threshold: 0.35
-  min_valid_slices: 4
-
-  # Fallback to slice centroid if circle fit fails
-  fallback_to_slice_centroid: true
-
-  # Slice center outlier rejection
-  center_outlier_reject_enable: true
-  max_center_xy_deviation: 2.0
-  max_center_jump_between_slices: 1.5
-
-  # Center axis constraints
-  force_axis_vertical: true
-  vertical_axis: [0.0, 0.0, 1.0]
-  vertical_angle_threshold_deg: 8.0
-
-  # Temporal smoothing
-  temporal_smoothing_enable: true
-  axis_point_alpha: 0.15
-  axis_dir_alpha: 0.10
-
-  # Jump rejection
-  jump_reject_enable: true
-  max_axis_lateral_jump: 0.8
-  max_axis_angle_jump_deg: 5.0
-  max_reject_count_before_reset: 15
-
-  # Control point management
-  min_control_point_spacing: 0.4
-  max_control_point_jump: 2.0
-  fit_global_axis_min_points: 6
-
-  # Original RANSAC line kept only for debug comparison
-  ransac_debug_enable: true
-  ransac_distance_threshold: 0.15
-  ransac_max_iterations: 500
-  ransac_min_inliers: 150
-  ransac_parallel_eps_angle_deg: 5.0
-
-  # Publishing
-  publish_candidate_cloud: true
-  publish_slice_centers: true
-  publish_control_points: true
-  publish_markers: true
-  publish_debug_ransac_line: true
-
-tower_ascent:
-  enable: false                    # set to true to activate guided ascent
-
-  strategy: "spiral"               # "spiral" or "step"
-
-  # Distance control
-  target_distance_from_axis: 8.0   # m, horizontal orbit distance from tower axis
-  tower_surface_clearance: 3.0     # m, additional clearance from tower surface
-
-  # Ascent parameters
-  ascent_speed: 0.5                # m/s vertical speed
-  spiral_revolution_time: 40.0     # seconds per full orbit
-
-  # Height limits
-  min_height: 2.0                  # m, absolute floor
-  max_height: 80.0                 # m, absolute ceiling
-  height_padding_below: 3.0        # m, start ascent this far below drone's initial z
-  height_padding_above: 5.0        # m, stop this far above highest control point
-
-  # Arrival tolerance
-  horizontal_arrival_tolerance: 0.5  # m
-  vertical_arrival_tolerance: 0.3    # m
-
-  # Yaw
-  yaw_rate: 0.3                    # rad/s max yaw rate
-
-  # Setpoint publishing
-  publish_rate: 20.0               # Hz, must be >2 Hz for PX4 OFFBOARD
-  setpoint_topic: "/iris_0/mavros/setpoint_position/local"
-  setpoint_frame: "map"
-
-  # Path preview
-  publish_path_preview: true
+  topic: "/wtb/uav_path"
+  min_distance: 0.05
+  max_points: 10000
 
 debug:
   print_timing: true
   publish_free_cloud: false
+
+tower_detector:
+  cloud_topic: "/wtb/current_cloud_world"
+  odom_topic: "/wtb/odom"
+  world_frame: "map"
+  status_topic: "/wtb/tower_detector/status"
+  control_point_topic: "/wtb/tower_detector/control_point"
+  control_pose_topic: "/wtb/tower_detector/control_pose"
+  axis_direction_topic: "/wtb/tower_detector/axis_direction"
+  markers_topic: "/wtb/tower_detector/markers"
+  inlier_cloud_topic: "/wtb/tower_detector/inlier_cloud"
+  path_topic: "/wtb/tower_detector/path"
+  diameter_topic: "/wtb/tower_detector/diameter"
+  radius_topic: "/wtb/tower_detector/radius"
+  param_namespace: "/wtb/tower_detector"
+  legacy_param_namespace: "/tower"
+  update_rate: 2.0
+  distance_threshold: 0.8
+  num_iterations: 80
+  vertical_angle_max_deg: 15.0
+  min_inlier_ratio: 0.05
+  min_line_inliers: 30
+  min_points: 30
+  max_sample_points: 3000
+  xy_tolerance: 1.5
+  radius_min: 0.1
+  radius_max: 10.0
+  marker_cylinder_diameter: 0.6
+  control_point_min_spacing: 1.5
+  max_path_points: 5000
+  estimate_diameter_once: true
+  publish_markers: true
+  publish_inlier_cloud: true
+  print_status: true

@@ -1,7 +1,11 @@
+import csv
+import math
 import os
+import queue
 import signal
 import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
 from tkinter import messagebox
@@ -47,6 +51,15 @@ COLORS = {
 
 FONT_FAMILY = "Noto Sans CJK SC"
 FONT_MONO = "DejaVu Sans Mono"
+WINDBLADE_LAUNCH_ID_ENV = "WINDBLADE_LAUNCH_ID"
+WINDBLADE_SCRIPT_NAME_ENV = "WINDBLADE_SCRIPT_NAME"
+WINDBLADE_PARENT_PID_ENV = "WINDBLADE_PARENT_PID"
+TERMINAL_SERVER_NAMES = {
+    "gnome-terminal",
+    "gnome-terminal-",
+    "gnome-terminal-server",
+}
+DEFAULT_POSE_TOPIC = "/iris_0/mavros/vision_odom/odom"
 
 SCRIPT_DETAILS = (
     (("清理", "cleanup"), ("维护工具", "清理 Gazebo 与 ROS 残留进程", COLORS["danger"])),
@@ -54,7 +67,10 @@ SCRIPT_DETAILS = (
     (("slam", "fastlio"), ("定位建图", "启动 FAST-LIO 定位与建图", COLORS["blue"])),
     (("真值", "mavros", "ground"), ("位姿链路", "连接 MAVROS 并发布位姿真值", COLORS["accent"])),
     (("仿真", "gazebo", "simulation"), ("仿真环境", "启动风机巡检仿真环境", COLORS["warning"])),
+    (("80m", "向上飞", "上升", "climb", "px4ctrl持续"), ("飞行控制", "px4ctrl 飞到 80m 后悬停", COLORS["accent"])),
+    (("2m", "悬停", "hover", "quick_takeoff"), ("飞行控制", "快速起飞并在 2m 处悬停", COLORS["accent"])),
     (("keyboard", "起飞", "takeoff"), ("飞行控制", "启动键盘控制与起飞流程", COLORS["accent"])),
+    (("停机", "停桨", "停止", "stop"), ("风机控制", "瞬时停止风机桨叶旋转", COLORS["danger"])),
 )
 
 
@@ -80,15 +96,44 @@ def rounded_rectangle(canvas, x1, y1, x2, y2, radius=14, **kwargs):
 
 def script_metadata(filename):
     stem = os.path.splitext(filename)[0]
-    display_name = stem.replace("_", " ")
-    if "." in display_name and display_name.split(".", 1)[0].isdigit():
-        display_name = display_name.split(".", 1)[1]
+    display_parts = stem.split(".")
+    while len(display_parts) > 1 and display_parts[0].isdigit():
+        display_parts.pop(0)
+    display_name = ".".join(display_parts).replace("_", " ")
 
     lowered = filename.lower()
     for keywords, details in SCRIPT_DETAILS:
         if any(keyword in lowered for keyword in keywords):
             return display_name, details[0], details[1], details[2]
     return display_name, "任务脚本", "执行已配置的 Shell 任务流程", COLORS["blue"]
+
+
+def configured_pose_topic():
+    return os.environ.get("WINDBLADE_POSE_TOPIC", DEFAULT_POSE_TOPIC).strip() or DEFAULT_POSE_TOPIC
+
+
+def quaternion_to_euler_degrees(qx, qy, qz, qw):
+    norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if norm <= 1e-9:
+        return None
+
+    qx, qy, qz, qw = qx / norm, qy / norm, qz / norm, qw / norm
+
+    sinr_cosp = 2.0 * (qw * qx + qy * qz)
+    cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2.0 * (qw * qy - qz * qx)
+    if abs(sinp) >= 1.0:
+        pitch = math.copysign(math.pi / 2.0, sinp)
+    else:
+        pitch = math.asin(sinp)
+
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+
+    return tuple(math.degrees(value) for value in (roll, pitch, yaw))
 
 
 class ScriptCard(tk.Canvas):
@@ -208,6 +253,13 @@ class WindbladeLauncher(tk.Tk):
         self.all_scripts = []
         self.current_columns = 0
         self._layout_after_id = None
+        self.pose_topic = configured_pose_topic()
+        self.pose_queue = queue.Queue()
+        self.pose_monitor_stop = threading.Event()
+        self.pose_monitor_thread = None
+        self.pose_process = None
+        self.pose_last_update = None
+        self.pose_values = {}
 
         self._set_window_icon()
         self._build_layout()
@@ -218,6 +270,8 @@ class WindbladeLauncher(tk.Tk):
         self.load_buttons()
         self._update_clock()
         self._update_process_status()
+        self._start_pose_monitor()
+        self._poll_pose_queue()
 
     # ---------- 界面构建 ----------
     def _set_window_icon(self):
@@ -530,6 +584,8 @@ class WindbladeLauncher(tk.Tk):
         log_panel.pack(side="right", fill="both")
         log_panel.pack_propagate(False)
 
+        self._build_pose_panel(log_panel)
+
         log_header = tk.Frame(log_panel, bg=COLORS["panel"], height=66)
         log_header.pack(fill="x", padx=17)
         log_header.pack_propagate(False)
@@ -601,6 +657,97 @@ class WindbladeLauncher(tk.Tk):
         self.log_text.tag_configure("success", foreground=COLORS["accent"])
         self.log_text.tag_configure("warning", foreground=COLORS["warning"])
         self.log_text.tag_configure("error", foreground=COLORS["danger"])
+
+    def _build_pose_panel(self, parent):
+        pose_panel = tk.Frame(parent, bg=COLORS["panel_alt"], padx=14, pady=12)
+        pose_panel.pack(fill="x", padx=12, pady=(12, 4))
+
+        header = tk.Frame(pose_panel, bg=COLORS["panel_alt"])
+        header.pack(fill="x")
+        tk.Label(
+            header,
+            text="无人机实时位姿",
+            bg=COLORS["panel_alt"],
+            fg=COLORS["text"],
+            font=(FONT_FAMILY, 11, "bold"),
+        ).pack(side="left")
+        self.pose_state_label = tk.Label(
+            header,
+            text="● 等待定位",
+            bg=COLORS["panel_alt"],
+            fg=COLORS["warning"],
+            font=(FONT_FAMILY, 8, "bold"),
+        )
+        self.pose_state_label.pack(side="right")
+
+        self.pose_topic_label = tk.Label(
+            pose_panel,
+            text=self.pose_topic,
+            bg=COLORS["panel_alt"],
+            fg=COLORS["dim"],
+            anchor="w",
+            justify="left",
+            wraplength=320,
+            font=(FONT_MONO, 7),
+        )
+        self.pose_topic_label.pack(fill="x", pady=(5, 8))
+
+        grid = tk.Frame(pose_panel, bg=COLORS["panel_alt"])
+        grid.pack(fill="x")
+        for column in range(3):
+            grid.grid_columnconfigure(column, weight=1, uniform="pose")
+
+        metrics = (
+            ("x", "X", "m"),
+            ("y", "Y", "m"),
+            ("z", "Z", "m"),
+            ("roll", "Roll", "°"),
+            ("pitch", "Pitch", "°"),
+            ("yaw", "Yaw", "°"),
+        )
+        for index, (key, label, unit) in enumerate(metrics):
+            row = index // 3
+            column = index % 3
+            self.pose_values[key] = self._pose_metric(grid, row, column, label, unit)
+
+        footer = tk.Frame(pose_panel, bg=COLORS["panel_alt"])
+        footer.pack(fill="x", pady=(8, 0))
+        self.pose_frame_label = tk.Label(
+            footer,
+            text="Frame: --",
+            bg=COLORS["panel_alt"],
+            fg=COLORS["dim"],
+            font=(FONT_MONO, 7),
+        )
+        self.pose_frame_label.pack(side="left")
+        self.pose_age_label = tk.Label(
+            footer,
+            text="未收到数据",
+            bg=COLORS["panel_alt"],
+            fg=COLORS["dim"],
+            font=(FONT_FAMILY, 8),
+        )
+        self.pose_age_label.pack(side="right")
+
+    def _pose_metric(self, parent, row, column, label, unit):
+        cell = tk.Frame(parent, bg=COLORS["panel"], padx=8, pady=7)
+        cell.grid(row=row, column=column, sticky="nsew", padx=3, pady=3)
+        tk.Label(
+            cell,
+            text=f"{label} / {unit}",
+            bg=COLORS["panel"],
+            fg=COLORS["dim"],
+            font=(FONT_FAMILY, 7),
+        ).pack(anchor="w")
+        value_label = tk.Label(
+            cell,
+            text="--",
+            bg=COLORS["panel"],
+            fg=COLORS["accent"],
+            font=(FONT_MONO, 12, "bold"),
+        )
+        value_label.pack(anchor="w", pady=(2, 0))
+        return value_label
 
     def _build_status_bar(self):
         bar = tk.Frame(self.workspace, bg=COLORS["sidebar"], height=30)
@@ -791,24 +938,379 @@ class WindbladeLauncher(tk.Tk):
         self.log_text.configure(state="disabled")
         self.log("日志已清空", "info")
 
+    # ---------- 实时位姿监控 ----------
+    def _start_pose_monitor(self):
+        if self.pose_monitor_thread and self.pose_monitor_thread.is_alive():
+            return
+        self.pose_monitor_stop.clear()
+        self.pose_monitor_thread = threading.Thread(
+            target=self._pose_monitor_loop,
+            name="windblade-pose-monitor",
+            daemon=True,
+        )
+        self.pose_monitor_thread.start()
+
+    def _stop_pose_monitor(self):
+        stop_event = getattr(self, "pose_monitor_stop", None)
+        if stop_event:
+            stop_event.set()
+
+        self._terminate_pose_process(signal.SIGTERM)
+        process = getattr(self, "pose_process", None)
+        if process and process.poll() is None:
+            try:
+                process.wait(timeout=0.8)
+            except subprocess.TimeoutExpired:
+                self._terminate_pose_process(signal.SIGKILL)
+
+    def _terminate_pose_process(self, sig):
+        process = getattr(self, "pose_process", None)
+        if not process or process.poll() is not None:
+            return
+        try:
+            os.killpg(os.getpgid(process.pid), sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                if sig == signal.SIGKILL:
+                    process.kill()
+                else:
+                    process.terminate()
+            except OSError:
+                pass
+
+    def _pose_monitor_loop(self):
+        command = ["rostopic", "echo", "-p", self.pose_topic]
+        while not self.pose_monitor_stop.is_set():
+            header = None
+            self.pose_queue.put(
+                {
+                    "type": "status",
+                    "message": f"等待定位话题：{self.pose_topic}",
+                    "color": COLORS["warning"],
+                }
+            )
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    start_new_session=True,
+                )
+            except FileNotFoundError:
+                self.pose_queue.put(
+                    {
+                        "type": "status",
+                        "message": "未找到 rostopic，请先 source ROS 环境",
+                        "color": COLORS["danger"],
+                    }
+                )
+                self.pose_monitor_stop.wait(3.0)
+                continue
+            except OSError as exc:
+                self.pose_queue.put(
+                    {
+                        "type": "status",
+                        "message": f"位姿监听启动失败：{exc}",
+                        "color": COLORS["danger"],
+                    }
+                )
+                self.pose_monitor_stop.wait(3.0)
+                continue
+
+            self.pose_process = process
+            try:
+                for raw_line in process.stdout:
+                    if self.pose_monitor_stop.is_set():
+                        break
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("%time"):
+                        header = self._csv_fields(line)
+                        self.pose_queue.put(
+                            {
+                                "type": "status",
+                                "message": "已连接定位数据",
+                                "color": COLORS["accent"],
+                            }
+                        )
+                        continue
+                    if header is None:
+                        if "ERROR" in line or "WARNING" in line or "unable" in line.lower():
+                            self.pose_queue.put(
+                                {
+                                    "type": "status",
+                                    "message": line[:90],
+                                    "color": COLORS["warning"],
+                                }
+                            )
+                        continue
+
+                    values = self._csv_fields(line)
+                    pose = self._parse_pose_row(header, values)
+                    if pose:
+                        self.pose_queue.put({"type": "pose", "pose": pose})
+            finally:
+                if process.poll() is None:
+                    self._terminate_pose_process(signal.SIGTERM)
+                if self.pose_process is process:
+                    self.pose_process = None
+
+            if not self.pose_monitor_stop.is_set():
+                self.pose_queue.put(
+                    {
+                        "type": "status",
+                        "message": "定位数据断开，正在重连…",
+                        "color": COLORS["warning"],
+                    }
+                )
+                self.pose_monitor_stop.wait(2.0)
+
+    def _csv_fields(self, line):
+        try:
+            return next(csv.reader([line]))
+        except (csv.Error, StopIteration):
+            return []
+
+    def _parse_pose_row(self, header, values):
+        if len(values) < len(header):
+            return None
+        data = dict(zip(header, values))
+
+        def clean_text(value):
+            return (value or "").strip().strip('"')
+
+        def get_float(*names):
+            for name in names:
+                value = data.get(name)
+                if value not in (None, ""):
+                    return float(value)
+            raise KeyError(names[0] if names else "")
+
+        try:
+            x = get_float("field.pose.pose.position.x", "field.pose.position.x")
+            y = get_float("field.pose.pose.position.y", "field.pose.position.y")
+            z = get_float("field.pose.pose.position.z", "field.pose.position.z")
+            qx = get_float("field.pose.pose.orientation.x", "field.pose.orientation.x")
+            qy = get_float("field.pose.pose.orientation.y", "field.pose.orientation.y")
+            qz = get_float("field.pose.pose.orientation.z", "field.pose.orientation.z")
+            qw = get_float("field.pose.pose.orientation.w", "field.pose.orientation.w")
+        except (KeyError, ValueError):
+            return None
+
+        euler = quaternion_to_euler_degrees(qx, qy, qz, qw)
+        if euler is None:
+            roll = pitch = yaw = None
+        else:
+            roll, pitch, yaw = euler
+
+        return {
+            "x": x,
+            "y": y,
+            "z": z,
+            "roll": roll,
+            "pitch": pitch,
+            "yaw": yaw,
+            "frame": clean_text(data.get("field.header.frame_id")) or "--",
+            "child_frame": clean_text(data.get("field.child_frame_id")) or "--",
+            "received_at": time.time(),
+        }
+
+    def _poll_pose_queue(self):
+        try:
+            while True:
+                item = self.pose_queue.get_nowait()
+                if item.get("type") == "pose":
+                    self._update_pose_display(item["pose"])
+                elif item.get("type") == "status":
+                    self._set_pose_status(item.get("message", "等待定位数据"), item.get("color", COLORS["warning"]))
+        except queue.Empty:
+            pass
+
+        self._update_pose_age()
+        self.after(250, self._poll_pose_queue)
+
+    def _set_pose_status(self, message, color):
+        if not hasattr(self, "pose_state_label"):
+            return
+        self.pose_state_label.configure(text=f"● {message}", fg=color)
+
+    def _update_pose_display(self, pose):
+        self.pose_last_update = pose.get("received_at", time.time())
+
+        for key in ("x", "y", "z"):
+            self.pose_values[key].configure(text=f"{pose[key]:.3f}")
+        for key in ("roll", "pitch", "yaw"):
+            value = pose.get(key)
+            self.pose_values[key].configure(text="--" if value is None else f"{value:.1f}")
+
+        self.pose_state_label.configure(text="● LIVE", fg=COLORS["accent"])
+        self.pose_frame_label.configure(text=f"Frame: {pose.get('frame', '--')} → {pose.get('child_frame', '--')}")
+        self.pose_age_label.configure(text="刚刚更新", fg=COLORS["accent"])
+
+    def _update_pose_age(self):
+        if not self.pose_last_update or not hasattr(self, "pose_age_label"):
+            return
+        age = max(0.0, time.time() - self.pose_last_update)
+        if age < 1.0:
+            text = "刚刚更新"
+            color = COLORS["accent"]
+        elif age < 5.0:
+            text = f"{age:.1f}s 前"
+            color = COLORS["accent"]
+        elif age < 12.0:
+            text = f"{age:.0f}s 未更新"
+            color = COLORS["warning"]
+            self.pose_state_label.configure(text="● 数据延迟", fg=COLORS["warning"])
+        else:
+            text = f"{age:.0f}s 未更新"
+            color = COLORS["danger"]
+            self.pose_state_label.configure(text="● 等待更新", fg=COLORS["danger"])
+        self.pose_age_label.configure(text=text, fg=color)
+
     def _update_clock(self):
         now = time.localtime()
         self.clock_label.configure(text=time.strftime("%H:%M:%S", now))
         self.date_label.configure(text=time.strftime("%Y年%m月%d日  %A", now))
         self.after(1000, self._update_clock)
 
+    def _pid_exists(self, pid):
+        if not pid or pid == os.getpid():
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+
+    def _process_name(self, pid):
+        try:
+            with open(f"/proc/{pid}/comm", "r", encoding="utf-8", errors="ignore") as handle:
+                return handle.read().strip()
+        except OSError:
+            return ""
+
+    def _should_signal_pid(self, pid):
+        name = self._process_name(pid)
+        # gnome-terminal 的窗口通常由单独的 server 进程托管。不要直接杀 server，
+        # 否则可能误关用户在本界面之外打开的终端；杀掉终端内带 token 的 bash/
+        # roslaunch/python 后，窗口会随着前台进程组退出而关闭。
+        if name in TERMINAL_SERVER_NAMES:
+            return False
+        return True
+
+    def _read_ppid(self, pid):
+        try:
+            with open(f"/proc/{pid}/stat", "r", encoding="utf-8", errors="ignore") as handle:
+                stat = handle.read()
+            end = stat.rfind(")")
+            if end == -1:
+                return None
+            fields = stat[end + 2 :].split()
+            return int(fields[1]) if len(fields) > 1 else None
+        except (OSError, ValueError):
+            return None
+
+    def _descendant_pids(self, root_pid):
+        if not root_pid:
+            return set()
+
+        children_by_parent = {}
+        try:
+            proc_entries = [entry for entry in os.listdir("/proc") if entry.isdigit()]
+        except OSError:
+            return set()
+
+        for entry in proc_entries:
+            pid = int(entry)
+            ppid = self._read_ppid(pid)
+            if ppid is not None:
+                children_by_parent.setdefault(ppid, set()).add(pid)
+
+        descendants = set()
+        stack = list(children_by_parent.get(root_pid, ()))
+        while stack:
+            pid = stack.pop()
+            if pid in descendants:
+                continue
+            descendants.add(pid)
+            stack.extend(children_by_parent.get(pid, ()))
+        return descendants
+
+    def _find_pids_by_env(self, env_name, env_value):
+        if not env_value:
+            return set()
+
+        needle = f"{env_name}={env_value}".encode("utf-8")
+        matches = set()
+        try:
+            proc_entries = [entry for entry in os.listdir("/proc") if entry.isdigit()]
+        except OSError:
+            return matches
+
+        own_pid = os.getpid()
+        for entry in proc_entries:
+            pid = int(entry)
+            if pid == own_pid:
+                continue
+            try:
+                with open(f"/proc/{pid}/environ", "rb") as handle:
+                    environ = handle.read()
+            except OSError:
+                continue
+            if needle in environ:
+                matches.add(pid)
+        return matches
+
+    def _refresh_process_record(self, record, announce=False):
+        if not record:
+            return set()
+
+        pids = set()
+        pid = record.get("pid")
+        if self._pid_exists(pid):
+            pids.add(pid)
+        pids.update(self._descendant_pids(pid))
+
+        launch_id = record.get("launch_id")
+        pids.update(self._find_pids_by_env(WINDBLADE_LAUNCH_ID_ENV, launch_id))
+        pids = {candidate for candidate in pids if self._pid_exists(candidate)}
+
+        tracked_pids = record.setdefault("tracked_pids", set())
+        tracked_pgids = record.setdefault("tracked_pgids", set())
+        new_pids = pids - tracked_pids
+        tracked_pids.update(pids)
+
+        for candidate in pids:
+            try:
+                pgid = os.getpgid(candidate)
+            except (ProcessLookupError, PermissionError, OSError):
+                continue
+            if pgid and pgid != os.getpgrp():
+                tracked_pgids.add(pgid)
+
+        if announce and new_pids:
+            preview = ", ".join(str(item) for item in sorted(new_pids)[:8])
+            suffix = "…" if len(new_pids) > 8 else ""
+            self.log(f"已登记终端/子进程：{record.get('filename', '未知脚本')}  ·  {preview}{suffix}", "info")
+        return pids
+
+    def _refresh_process_record_by_launch_id(self, launch_id, announce=False):
+        for record in self.running_processes:
+            if record.get("launch_id") == launch_id:
+                self._refresh_process_record(record, announce=announce)
+                self.process_stat_value.configure(text=str(self._active_processes()))
+                return
+
     def _is_process_record_active(self, record):
+        if self._refresh_process_record(record):
+            return True
+
         process = record.get("process")
         if process and process.poll() is None:
             return True
-
-        pgid = record.get("pgid")
-        if pgid:
-            try:
-                os.killpg(pgid, 0)
-                return True
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
 
         pid = record.get("pid")
         if pid:
@@ -844,30 +1346,41 @@ class WindbladeLauncher(tk.Tk):
         self.log(f"正在启动：{filename}", "info")
         try:
             os.chmod(path, 0o755)
+            launch_id = f"windblade-{os.getpid()}-{int(time.time() * 1000)}-{len(self.running_processes) + 1}"
+            launch_env = os.environ.copy()
+            launch_env[WINDBLADE_LAUNCH_ID_ENV] = launch_id
+            launch_env[WINDBLADE_SCRIPT_NAME_ENV] = filename
+            launch_env[WINDBLADE_PARENT_PID_ENV] = str(os.getpid())
             process = subprocess.Popen(
                 [path],
                 cwd=SCRIPTS_FOLDER,
                 start_new_session=True,
+                env=launch_env,
             )
             try:
                 pgid = os.getpgid(process.pid)
             except (ProcessLookupError, PermissionError, OSError):
                 pgid = None
 
-            self.running_processes.append(
-                {
-                    "filename": filename,
-                    "pid": process.pid,
-                    "pgid": pgid,
-                    "process": process,
-                    "started_at": time.strftime("%H:%M:%S"),
-                }
-            )
+            record = {
+                "filename": filename,
+                "pid": process.pid,
+                "pgid": pgid,
+                "process": process,
+                "started_at": time.strftime("%H:%M:%S"),
+                "launch_id": launch_id,
+                "tracked_pids": {process.pid},
+                "tracked_pgids": {pgid} if pgid else set(),
+            }
+            self.running_processes.append(record)
+            self.after(800, lambda launch_id=launch_id: self._refresh_process_record_by_launch_id(launch_id, announce=True))
+            self.after(2200, lambda launch_id=launch_id: self._refresh_process_record_by_launch_id(launch_id, announce=True))
+            self.after(5000, lambda launch_id=launch_id: self._refresh_process_record_by_launch_id(launch_id, announce=False))
             self.process_stat_value.configure(text=str(self._active_processes()))
             if pgid:
-                self.log(f"启动成功：{filename}  ·  PID {process.pid}  ·  PGID {pgid}", "success")
+                self.log(f"启动成功：{filename}  ·  PID {process.pid}  ·  PGID {pgid}  ·  已启用终端追踪", "success")
             else:
-                self.log(f"启动成功：{filename}  ·  PID {process.pid}", "success")
+                self.log(f"启动成功：{filename}  ·  PID {process.pid}  ·  已启用终端追踪", "success")
         except Exception as exc:
             self.log(f"启动失败：{filename}  ·  {exc}", "error")
 
@@ -890,39 +1403,93 @@ class WindbladeLauncher(tk.Tk):
         self._cleanup_processes()
         self.destroy()
 
+    def destroy(self):
+        self._stop_pose_monitor()
+        super().destroy()
+
     def _cleanup_processes(self):
         records = list(self.running_processes)
         if records:
             self.log(f"正在停止 {len(records)} 条脚本启动记录…", "warning")
 
         for record in records:
+            self._refresh_process_record(record, announce=True)
             filename = record.get("filename", "未知脚本")
             pid = record.get("pid")
-            if self._send_signal_to_process_record(record, signal.SIGTERM):
-                self.log(f"已发送停止信号：{filename}  ·  PID {pid}", "warning")
+            signal_count = self._send_signal_to_process_record(record, signal.SIGTERM)
+            if signal_count:
+                self.log(f"已发送停止信号：{filename}  ·  PID {pid}  ·  目标 {signal_count} 个", "warning")
 
         if records:
-            self.after(150, self.update_idletasks)
+            self.update_idletasks()
+            time.sleep(0.6)
+            for record in records:
+                remaining = self._refresh_process_record(record)
+                if not remaining:
+                    continue
+                kill_count = self._send_signal_to_process_record(record, signal.SIGKILL)
+                if kill_count:
+                    self.log(
+                        f"强制关闭残留进程：{record.get('filename', '未知脚本')}  ·  目标 {kill_count} 个",
+                        "warning",
+                    )
+            self.update_idletasks()
         self.running_processes.clear()
 
     def _send_signal_to_process_record(self, record, sig):
-        pgid = record.get("pgid")
-        if pgid:
-            try:
-                os.killpg(pgid, sig)
-                return True
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
+        self._refresh_process_record(record)
 
+        target_pids = {
+            pid
+            for pid in record.get("tracked_pids", set())
+            if self._pid_exists(pid) and self._should_signal_pid(pid)
+        }
         pid = record.get("pid")
-        if pid:
+        if self._pid_exists(pid) and self._should_signal_pid(pid):
+            target_pids.add(pid)
+
+        target_pgids = set()
+        pgid = record.get("pgid")
+        if pgid and self._pid_exists(record.get("pid")):
             try:
-                os.kill(pid, sig)
-                return True
+                if os.getpgid(record.get("pid")) == pgid:
+                    target_pgids.add(pgid)
             except (ProcessLookupError, PermissionError, OSError):
                 pass
 
-        return False
+        own_pgid = os.getpgrp()
+        for target_pid in list(target_pids):
+            try:
+                target_pgid = os.getpgid(target_pid)
+            except (ProcessLookupError, PermissionError, OSError):
+                continue
+            if target_pgid and target_pgid != own_pgid:
+                target_pgids.add(target_pgid)
+
+        signaled = 0
+        for target_pgid in sorted(target_pgids):
+            if not target_pgid or target_pgid == own_pgid:
+                continue
+            try:
+                os.killpg(target_pgid, sig)
+                signaled += 1
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
+        for target_pid in sorted(target_pids):
+            try:
+                target_pgid = os.getpgid(target_pid)
+            except (ProcessLookupError, PermissionError, OSError):
+                target_pgid = None
+            if target_pgid in target_pgids:
+                continue
+            try:
+                os.kill(target_pid, sig)
+                signaled += 1
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
+        return signaled
 
     def _configure_shortcuts(self):
         self.bind("<F5>", lambda _event: self.load_buttons(announce=True))

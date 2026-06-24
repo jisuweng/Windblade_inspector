@@ -46,27 +46,31 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
 )
 
-add_executable(wtb_mapping_node
+add_library(wtb_mapping_core
+  src/mapping_config.cpp
+  src/mapping_pipeline.cpp
   src/pointcloud_stitcher.cpp
   src/occupancy_grid_3d.cpp
-  src/tower_axis_estimator.cpp
-  src/tower_ascent_controller.cpp
-  src/wtb_mapping_node.cpp
+  src/ros_conversions.cpp
 )
 
-add_executable(lidar_filter
-  src/lidar_filter.cpp
+add_executable(wtb_mapping_node
+  src/wtb_mapping_node.cpp
 )
 
 add_executable(initial_pose_frame_node
   src/initial_pose_frame_node.cpp
 )
 
-add_dependencies(wtb_mapping_node
+add_executable(wtb_tower_detector_node
+  src/wtb_tower_detector_node.cpp
+)
+
+add_dependencies(wtb_mapping_core
   ${catkin_EXPORTED_TARGETS}
 )
 
-add_dependencies(lidar_filter
+add_dependencies(wtb_mapping_node
   ${catkin_EXPORTED_TARGETS}
 )
 
@@ -74,15 +78,25 @@ add_dependencies(initial_pose_frame_node
   ${catkin_EXPORTED_TARGETS}
 )
 
-target_link_libraries(wtb_mapping_node
+add_dependencies(wtb_tower_detector_node
+  ${catkin_EXPORTED_TARGETS}
+)
+
+target_link_libraries(wtb_mapping_core
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
 )
 
-target_link_libraries(lidar_filter
+target_link_libraries(wtb_mapping_node
+  wtb_mapping_core
   ${catkin_LIBRARIES}
 )
 
 target_link_libraries(initial_pose_frame_node
   ${catkin_LIBRARIES}
+)
+
+target_link_libraries(wtb_tower_detector_node
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
 )
