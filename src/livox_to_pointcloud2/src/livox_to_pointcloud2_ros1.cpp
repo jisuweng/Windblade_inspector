@@ -41,9 +41,18 @@ public:
     ROS_INFO_STREAM("[LivoxToPointCloud2] cropped Livox CustomMsg: " << cropped_topic_);
     ROS_INFO_STREAM("[LivoxToPointCloud2] horizontal_fov=" << config.horizontal_fov_deg
                     << " deg, vertical_fov=" << config.vertical_fov_deg
-                    << " deg, range=[" << config.min_range << ", "
+                    << " deg, use_vertical_fov=" << (config.use_vertical_fov ? "true" : "false")
+                    << ", range=[" << config.min_range << ", "
                     << (std::isfinite(config.max_range) ? std::to_string(config.max_range) : "inf")
-                    << "] m, forward_axis=+X");
+                    << "] m (" << (config.use_3d_range ? "3D" : "2D horizontal")
+                    << "), z=[" << config.z_min << ", " << config.z_max << "]"
+                    << ", x_min=" << config.x_min
+                    << ", y_abs=" << config.y_abs
+                    << ", filter_frame_xyz=[" << config.filter_frame_x << ", "
+                    << config.filter_frame_y << ", " << config.filter_frame_z << "]"
+                    << ", filter_frame_rpy=[" << config.filter_frame_roll << ", "
+                    << config.filter_frame_pitch << ", " << config.filter_frame_yaw << "]"
+                    << ", forward_axis=+X");
   }
 
 private:
@@ -57,10 +66,22 @@ private:
     private_nh_.param<int>("queue_size", queue_size_, 10);
 
     FilterConfig config;
-    private_nh_.param<double>("horizontal_fov_deg", config.horizontal_fov_deg, 60.0);
-    private_nh_.param<double>("vertical_fov_deg", config.vertical_fov_deg, 60.0);
+    private_nh_.param<double>("horizontal_fov_deg", config.horizontal_fov_deg, 80.0);
+    private_nh_.param<double>("vertical_fov_deg", config.vertical_fov_deg, 80.0);
     private_nh_.param<double>("min_range", config.min_range, 0.0);
     private_nh_.param<double>("max_range", config.max_range, -1.0);
+    private_nh_.param<bool>("use_3d_range", config.use_3d_range, false);
+    private_nh_.param<bool>("use_vertical_fov", config.use_vertical_fov, true);
+    private_nh_.param<double>("z_min", config.z_min, config.z_min);
+    private_nh_.param<double>("z_max", config.z_max, config.z_max);
+    private_nh_.param<double>("x_min", config.x_min, config.x_min);
+    private_nh_.param<double>("y_abs", config.y_abs, config.y_abs);
+    private_nh_.param<double>("filter_frame_x", config.filter_frame_x, 0.0);
+    private_nh_.param<double>("filter_frame_y", config.filter_frame_y, 0.0);
+    private_nh_.param<double>("filter_frame_z", config.filter_frame_z, 0.0);
+    private_nh_.param<double>("filter_frame_roll", config.filter_frame_roll, 0.0);
+    private_nh_.param<double>("filter_frame_pitch", config.filter_frame_pitch, 0.0);
+    private_nh_.param<double>("filter_frame_yaw", config.filter_frame_yaw, 0.0);
     private_nh_.param<std::string>("output_frame_id", config.output_frame_id, "");
     converter_.setConfig(config);
 

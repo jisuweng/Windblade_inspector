@@ -67,7 +67,7 @@ SCRIPT_DETAILS = (
     (("slam", "fastlio"), ("定位建图", "启动 FAST-LIO 定位与建图", COLORS["blue"])),
     (("真值", "mavros", "ground"), ("位姿链路", "连接 MAVROS 并发布位姿真值", COLORS["accent"])),
     (("仿真", "gazebo", "simulation"), ("仿真环境", "启动风机巡检仿真环境", COLORS["warning"])),
-    (("80m", "向上飞", "上升", "climb", "px4ctrl持续"), ("飞行控制", "px4ctrl 飞到 80m 后悬停", COLORS["accent"])),
+    (("指定高度", "飞到", "80m", "向上飞", "上升", "climb", "px4ctrl持续"), ("飞行控制", "输入高度后 px4ctrl 飞到目标高度悬停", COLORS["accent"])),
     (("2m", "悬停", "hover", "quick_takeoff"), ("飞行控制", "快速起飞并在 2m 处悬停", COLORS["accent"])),
     (("keyboard", "起飞", "takeoff"), ("飞行控制", "启动键盘控制与起飞流程", COLORS["accent"])),
     (("停机", "停桨", "停止", "stop"), ("风机控制", "瞬时停止风机桨叶旋转", COLORS["danger"])),

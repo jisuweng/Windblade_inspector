@@ -44,10 +44,10 @@ TEST(LivoxConverter, PublishesCroppedPointCloud2AndCroppedLivoxCloud)
   input.lidar_id = 7U;
   input.points = {
       pointAtAngles(0.0, 0.0),
-      pointAtAngles(29.9, 0.0),
-      pointAtAngles(-29.9, 29.9),
-      pointAtAngles(30.1, 0.0),
-      pointAtAngles(0.0, -30.1),
+      pointAtAngles(39.9, 0.0),
+      pointAtAngles(-39.9, 39.9),
+      pointAtAngles(40.1, 0.0),
+      pointAtAngles(0.0, -40.1),
       pointAtAngles(180.0, 0.0),
   };
   livox_laser_simulation::CustomPoint invalid;
@@ -94,6 +94,41 @@ TEST(LivoxConverter, RangeAffectsBothCroppedOutputsAndFrameOverrideAffectsBoth)
   EXPECT_EQ("body", result.cropped_pointcloud2->header.frame_id);
   EXPECT_EQ("body", result.cropped.header.frame_id);
   EXPECT_FLOAT_EQ(2.0F, result.cropped.points[0].x);
+}
+
+TEST(LivoxConverter, CanCropInTiltCompensatedFilterFrameWhilePublishingOriginalPoints)
+{
+  constexpr double kPi = 3.14159265358979323846;
+  const double pitch = 30.0 * kPi / 180.0;
+
+  livox_laser_simulation::CustomPoint body_forward_seen_by_tilted_lidar;
+  body_forward_seen_by_tilted_lidar.x = static_cast<float>(std::cos(pitch));
+  body_forward_seen_by_tilted_lidar.y = 0.0F;
+  body_forward_seen_by_tilted_lidar.z = static_cast<float>(std::sin(pitch));
+  body_forward_seen_by_tilted_lidar.reflectivity = 11;
+
+  livox_laser_simulation::CustomPoint lidar_forward_after_body_crop;
+  lidar_forward_after_body_crop.x = 1.0F;
+  lidar_forward_after_body_crop.y = 0.0F;
+  lidar_forward_after_body_crop.z = 0.0F;
+  lidar_forward_after_body_crop.reflectivity = 22;
+
+  livox_laser_simulation::CustomMsg input;
+  input.header.frame_id = "livox_link";
+  input.points = { body_forward_seen_by_tilted_lidar, lidar_forward_after_body_crop };
+  input.point_num = input.points.size();
+
+  livox_to_pointcloud2::FilterConfig config;
+  config.vertical_fov_deg = 10.0;
+  config.filter_frame_pitch = pitch;
+  livox_to_pointcloud2::LivoxConverter converter(config);
+  const livox_to_pointcloud2::ConversionResult result = converter.convert(input);
+
+  ASSERT_EQ(1U, result.cropped.point_num);
+  EXPECT_EQ(11U, result.cropped.points[0].reflectivity);
+  EXPECT_FLOAT_EQ(body_forward_seen_by_tilted_lidar.x, result.cropped.points[0].x);
+  EXPECT_FLOAT_EQ(body_forward_seen_by_tilted_lidar.z, result.cropped.points[0].z);
+  EXPECT_EQ("livox_link", result.cropped.header.frame_id);
 }
 
 }  // namespace

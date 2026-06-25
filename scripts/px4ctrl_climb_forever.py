@@ -2,6 +2,7 @@
 
 import argparse
 import math
+import sys
 
 import rospy
 from nav_msgs.msg import Odometry
@@ -26,8 +27,36 @@ def parse_args():
     )
     parser.add_argument("--mode-timeout", type=float, default=30.0)
     parser.add_argument("--subscriber-timeout", type=float, default=10.0)
-    parser.add_argument("--target-height", type=float, default=80.0)
+    parser.add_argument("--target-height", type=float, default=None)
+    parser.add_argument("--default-height", type=float, default=80.0)
     return parser.parse_args()
+
+
+def prompt_target_height(default_height):
+    try:
+        import tkinter as tk
+        from tkinter import messagebox, simpledialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        height = simpledialog.askfloat(
+            "飞行高度",
+            "请输入目标悬停高度（m）：",
+            initialvalue=default_height,
+            minvalue=0.1,
+            parent=root,
+        )
+        if height is None:
+            messagebox.showinfo("已取消", "未输入目标高度，脚本已退出。", parent=root)
+            root.destroy()
+            sys.exit(0)
+        root.destroy()
+        return height
+    except Exception as exc:
+        print("无法打开高度输入窗口：{}".format(exc))
+        raw = input("请输入目标悬停高度（m，默认 {:.1f}）：".format(default_height)).strip()
+        return float(raw) if raw else default_height
 
 
 def yaw_from_quaternion(q):
@@ -181,6 +210,8 @@ class Px4ctrlClimbForever:
 
 def main():
     args = parse_args()
+    if args.target_height is None:
+        args.target_height = prompt_target_height(args.default_height)
     rospy.init_node("px4ctrl_climb_forever")
     try:
         Px4ctrlClimbForever(args).run()

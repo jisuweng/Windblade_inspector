@@ -1,7 +1,7 @@
 input:
   # Only point-cloud subscription used by wtb_mapping_node.
   # This topic is published by livox_to_pointcloud2 after FOV/range cropping.
-  cloud_topic: "/livox/lidar"
+  cloud_topic: "/livox/lidar_filtered"
   odom_topic: &local_odom "/wtb/odom"
   cloud_type: "livox_custom"
   use_tf: false
@@ -80,6 +80,7 @@ tower_detector:
   min_points: 30
   max_sample_points: 3000
   xy_tolerance: 1.5
+  xy_smoothing_alpha: 0.6
   radius_min: 0.1
   radius_max: 10.0
   marker_cylinder_diameter: 0.6

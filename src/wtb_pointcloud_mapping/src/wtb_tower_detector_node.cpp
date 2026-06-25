@@ -129,6 +129,7 @@ struct TowerDetectorConfig
   int min_points = 30;
   int max_sample_points = 3000;
   double xy_tolerance = 1.5;
+  double xy_smoothing_alpha = 0.6;
   double radius_min = 0.1;
   double radius_max = 10.0;
   double marker_cylinder_diameter = 0.6;
@@ -171,6 +172,7 @@ TowerDetectorConfig loadConfig(const ros::NodeHandle& nh,
   readParam(nh, private_nh, "min_points", config.min_points);
   readParam(nh, private_nh, "max_sample_points", config.max_sample_points);
   readParam(nh, private_nh, "xy_tolerance", config.xy_tolerance);
+  readParam(nh, private_nh, "xy_smoothing_alpha", config.xy_smoothing_alpha);
   readParam(nh, private_nh, "radius_min", config.radius_min);
   readParam(nh, private_nh, "radius_max", config.radius_max);
   readParam(nh, private_nh, "marker_cylinder_diameter", config.marker_cylinder_diameter);
@@ -191,6 +193,7 @@ TowerDetectorConfig loadConfig(const ros::NodeHandle& nh,
   config.min_points = std::max(2, config.min_points);
   config.max_sample_points = std::max(0, config.max_sample_points);
   config.xy_tolerance = std::max(0.0, config.xy_tolerance);
+  config.xy_smoothing_alpha = clamp(config.xy_smoothing_alpha, 0.0, 1.0);
   config.marker_cylinder_diameter = std::max(0.01, config.marker_cylinder_diameter);
   config.control_point_min_spacing = std::max(0.0, config.control_point_min_spacing);
   config.max_path_points = std::max(1, config.max_path_points);
@@ -599,9 +602,13 @@ private:
       lateral_jump = std::hypot(new_x - ref_x_, new_y - ref_y_);
       if (lateral_jump <= config_.xy_tolerance)
       {
+        ref_x_ = (1.0 - config_.xy_smoothing_alpha) * ref_x_ +
+                 config_.xy_smoothing_alpha * new_x;
+        ref_y_ = (1.0 - config_.xy_smoothing_alpha) * ref_y_ +
+                 config_.xy_smoothing_alpha * new_y;
         ref_z_min_ = std::min(ref_z_min_, z_min);
         ref_z_max_ = std::max(ref_z_max_, z_max);
-        state_action = "extend";
+        state_action = "track";
       }
       else
       {
@@ -643,6 +650,7 @@ private:
        << ", line_inliers=" << line.inliers
        << ", inlier_ratio=" << line.inlier_ratio
        << ", vertical_angle_deg=" << line.vertical_angle_deg
+       << ", measured_xy=(" << new_x << "," << new_y << ")"
        << ", ref_xy=(" << ref_x_ << "," << ref_y_ << ")"
        << ", z=[" << ref_z_min_ << "," << ref_z_max_ << "]"
        << ", control_point=(" << control_point.x() << ","

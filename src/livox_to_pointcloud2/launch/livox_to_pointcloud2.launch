@@ -3,10 +3,22 @@
   <arg name="cropped_topic" default="/livox/lidar_filtered" />
   <arg name="debug_pcl2_topic" default="/livox/debug/lidar_filtered_pcl2" />
   <arg name="publish_debug_pcl2" default="true" />
-  <arg name="horizontal_fov_deg" default="60.0" />
-  <arg name="vertical_fov_deg" default="60.0" />
+  <arg name="horizontal_fov_deg" default="80.0" />
+  <arg name="vertical_fov_deg" default="80.0" />
   <arg name="min_range" default="0.0" />
   <arg name="max_range" default="70.0" />
+  <arg name="use_3d_range" default="false" />
+  <arg name="use_vertical_fov" default="true" />
+  <arg name="z_min" default="-1000000000.0" />
+  <arg name="z_max" default="1000000000.0" />
+  <arg name="x_min" default="-1000000000.0" />
+  <arg name="y_abs" default="-1.0" />
+  <arg name="filter_frame_x" default="0.07" />
+  <arg name="filter_frame_y" default="0.0" />
+  <arg name="filter_frame_z" default="0.072" />
+  <arg name="filter_frame_roll" default="0.0" />
+  <arg name="filter_frame_pitch" default="0.3925" />
+  <arg name="filter_frame_yaw" default="0.0" />
   <arg name="output_frame_id" default="" />
   <arg name="queue_size" default="10" />
 
@@ -22,6 +34,18 @@
     <param name="vertical_fov_deg" value="$(arg vertical_fov_deg)" />
     <param name="min_range" value="$(arg min_range)" />
     <param name="max_range" value="$(arg max_range)" />
+    <param name="use_3d_range" value="$(arg use_3d_range)" />
+    <param name="use_vertical_fov" value="$(arg use_vertical_fov)" />
+    <param name="z_min" value="$(arg z_min)" />
+    <param name="z_max" value="$(arg z_max)" />
+    <param name="x_min" value="$(arg x_min)" />
+    <param name="y_abs" value="$(arg y_abs)" />
+    <param name="filter_frame_x" value="$(arg filter_frame_x)" />
+    <param name="filter_frame_y" value="$(arg filter_frame_y)" />
+    <param name="filter_frame_z" value="$(arg filter_frame_z)" />
+    <param name="filter_frame_roll" value="$(arg filter_frame_roll)" />
+    <param name="filter_frame_pitch" value="$(arg filter_frame_pitch)" />
+    <param name="filter_frame_yaw" value="$(arg filter_frame_yaw)" />
     <param name="output_frame_id" value="$(arg output_frame_id)" />
     <param name="queue_size" value="$(arg queue_size)" />
   </node>

@@ -20,10 +20,22 @@ using PointField = sensor_msgs::PointField;
 
 struct FilterConfig
 {
-  double horizontal_fov_deg = 60.0;
-  double vertical_fov_deg = 60.0;
+  double horizontal_fov_deg = 80.0;
+  double vertical_fov_deg = 80.0;
   double min_range = 0.0;
   double max_range = std::numeric_limits<double>::infinity();
+  bool use_3d_range = false;
+  bool use_vertical_fov = true;
+  double z_min = -std::numeric_limits<double>::infinity();
+  double z_max = std::numeric_limits<double>::infinity();
+  double x_min = -std::numeric_limits<double>::infinity();
+  double y_abs = -1.0;
+  double filter_frame_x = 0.0;
+  double filter_frame_y = 0.0;
+  double filter_frame_z = 0.0;
+  double filter_frame_roll = 0.0;
+  double filter_frame_pitch = 0.0;
+  double filter_frame_yaw = 0.0;
   std::string output_frame_id;
 };
 
@@ -87,6 +99,13 @@ public:
   }
 
 private:
+  struct Point3
+  {
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+  };
+
   static constexpr std::uint32_t kXOffset = 0;
   static constexpr std::uint32_t kYOffset = 4;
   static constexpr std::uint32_t kZOffset = 8;
@@ -107,7 +126,45 @@ private:
       config.max_range = std::numeric_limits<double>::infinity();
     }
     config.max_range = std::max(config.min_range, config.max_range);
+    if (std::isnan(config.z_min))
+    {
+      config.z_min = -std::numeric_limits<double>::infinity();
+    }
+    if (std::isnan(config.z_max))
+    {
+      config.z_max = std::numeric_limits<double>::infinity();
+    }
+    if (config.z_min > config.z_max)
+    {
+      std::swap(config.z_min, config.z_max);
+    }
+    if (std::isnan(config.x_min))
+    {
+      config.x_min = -std::numeric_limits<double>::infinity();
+    }
+    if (!std::isfinite(config.y_abs))
+    {
+      config.y_abs = -1.0;
+    }
     return config;
+  }
+
+  Point3 pointInFilterFrame(const double x, const double y, const double z) const
+  {
+    const double cr = std::cos(config_.filter_frame_roll);
+    const double sr = std::sin(config_.filter_frame_roll);
+    const double cp = std::cos(config_.filter_frame_pitch);
+    const double sp = std::sin(config_.filter_frame_pitch);
+    const double cy = std::cos(config_.filter_frame_yaw);
+    const double sy = std::sin(config_.filter_frame_yaw);
+
+    Point3 p;
+    p.x = cy * cp * x + (cy * sp * sr - sy * cr) * y +
+          (cy * sp * cr + sy * sr) * z + config_.filter_frame_x;
+    p.y = sy * cp * x + (sy * sp * sr + cy * cr) * y +
+          (sy * sp * cr - cy * sr) * z + config_.filter_frame_y;
+    p.z = -sp * x + cp * sr * y + cp * cr * z + config_.filter_frame_z;
+    return p;
   }
 
   bool accepts(const double x, const double y, const double z) const
@@ -117,20 +174,50 @@ private:
       return false;
     }
 
-    const double horizontal_range = std::hypot(x, y);
-    const double range = std::hypot(horizontal_range, z);
+    const Point3 p = pointInFilterFrame(x, y, z);
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+    {
+      return false;
+    }
+
+    if (p.x < config_.x_min)
+    {
+      return false;
+    }
+    if (p.z < config_.z_min || p.z > config_.z_max)
+    {
+      return false;
+    }
+    if (config_.y_abs > 0.0 && std::abs(p.y) > config_.y_abs)
+    {
+      return false;
+    }
+
+    const double horizontal_range = std::hypot(p.x, p.y);
+    const double range = config_.use_3d_range ? std::hypot(horizontal_range, p.z) : horizontal_range;
     if (range < config_.min_range || range > config_.max_range)
     {
       return false;
     }
 
-    const double horizontal_angle = std::atan2(y, x);
-    const double vertical_angle = std::atan2(z, horizontal_range);
+    const double horizontal_angle = std::atan2(p.y, p.x);
     const double horizontal_half_angle = config_.horizontal_fov_deg * kPi / 360.0;
-    const double vertical_half_angle = config_.vertical_fov_deg * kPi / 360.0;
+    if (std::abs(horizontal_angle) > horizontal_half_angle)
+    {
+      return false;
+    }
 
-    return std::abs(horizontal_angle) <= horizontal_half_angle &&
-           std::abs(vertical_angle) <= vertical_half_angle;
+    if (config_.use_vertical_fov)
+    {
+      const double vertical_angle = std::atan2(p.z, horizontal_range);
+      const double vertical_half_angle = config_.vertical_fov_deg * kPi / 360.0;
+      if (std::abs(vertical_angle) > vertical_half_angle)
+      {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   static void addField(PointCloud2& cloud, const std::string& name, const std::uint32_t offset,
